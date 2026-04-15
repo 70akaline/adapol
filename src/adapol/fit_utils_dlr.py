@@ -318,7 +318,8 @@ def polefitting_dlr( Delta_dlr, w_dlr, beta, eps=1e-5, Nw=None,  Np_max=50, Z = 
     error_best = np.inf
     weight_best = None
     pol_best = None
-    # Np_max = min(Np_max, len(w_dlr)+1)
+    errorlist = - np.ones(Np_max) *1.0
+    Np_max = min(Np_max, len(w_dlr)+1)
 
     for mmax in range(4,Np_max,2):
         
@@ -331,8 +332,9 @@ def polefitting_dlr( Delta_dlr, w_dlr, beta, eps=1e-5, Nw=None,  Np_max=50, Z = 
             if verbose:
                 print(f"Warning: when running AAA with {len(pol)} poles, found {len(pol[np.abs(np.imag(pol))> min(1000*eps, 1e-3)])} poles with imaginary part larger than {min(1000*eps, 1e-3)}, which are likely to be spurious poles from the AAA algorithm. These poles will be discarded in the following optimization.")
             # pol = pol[np.abs(np.imag(pol))< 1e-3]
-    
+
         pol = np.real(pol)
+        
         pol = merge_degenerate_poles(pol, verbose=verbose)
  
         
@@ -349,7 +351,7 @@ def polefitting_dlr( Delta_dlr, w_dlr, beta, eps=1e-5, Nw=None,  Np_max=50, Z = 
         if len(pol) > 0:
             res = scipy_minimize(
                 fhere, pol, method='L-BFGS-B', jac=True,
-                options=dict(gtol=1e-14, ftol=1e-14))
+                options=dict(gtol=1e-28, ftol=1e-28))
             x = res.x
             if verbose:
                 print("                   Final optimization result:", res.fun / Num_of_nonzero_entries)
@@ -362,6 +364,12 @@ def polefitting_dlr( Delta_dlr, w_dlr, beta, eps=1e-5, Nw=None,  Np_max=50, Z = 
 
         if Num_of_nonzero_entries > 0:
             error /= Num_of_nonzero_entries
+        print(f"Number of poles: {len(x)}, Fitting error: {error}")
+        if verbose:
+            if errorlist[len(pol)] < 0:
+                errorlist[len(pol)] = error
+            if errorlist[len(pol)] > 0 and errorlist[len(pol)] > error:
+                errorlist[len(pol)] = error
 
         if error < eps and len(x) <= len(w_dlr):
             print(f"Desired accuracy {eps} achieved with {len(x)} poles, in comparison to {len(w_dlr)} original pole representation. Returning the result.")
@@ -370,10 +378,14 @@ def polefitting_dlr( Delta_dlr, w_dlr, beta, eps=1e-5, Nw=None,  Np_max=50, Z = 
             error_best = error.copy()
             weight_best = weight.copy()
             pol_best = x.copy() 
+        
     print("Failed to reach the desired accuracy", eps, "returning the best result found.")
     print(f"Best error achieved: {error_best} with {len(pol_best)} poles. In comparison, the original pole representation has {len(w_dlr)} poles. ")
     print(f"Try adjusting the parameters such as Nw for the Matsubara frequency grid, or providing initial pole representation with better accuracy")
-        
+    # if verbose:
+    #     for i in range(len(errorlist)):
+    #         if errorlist[i] > 0:
+    #             print(f"Number of poles: {i}, Fitting error: {errorlist[i]}")
     return weight_best, pol_best, error_best
         
 
