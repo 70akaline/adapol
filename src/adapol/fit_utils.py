@@ -8,6 +8,92 @@ import scipy.optimize
 from .aaa import aaa_matrix_real
 
 
+def _solve_psd_weight_sdp(M, G, complex=True, eps=1e-8):
+    """Solve the PSD weight subproblem without CVXPY complex canonicalization.
+
+    Fits the pole weights X_l in the causal representation of
+    PhysRevB.107.075151 (arXiv:2210.04187):
+
+        G(z) = sum_l X_l / (z - lambda_l),
+
+    with real poles lambda_l and Hermitian positive-semidefinite weights
+    X_l >= 0. This routine only solves for X_l; the lambda_l are fixed.
+
+    To avoid CVXPY's slow complex-Hermitian canonicalization we use the exact
+    real embedding of complex Hermitian matrices. Writing X = A + i B,
+
+        X Hermitian PSD  <=>  A = A^T,  B = -B^T (B + B^T == 0),
+                              [[A, -B],
+                               [B,  A]] >= 0.
+
+    This is an exact isomorphism, not a relaxation: the real block has the same
+    eigenvalues as X (each doubled), so the real block is PSD iff X is. The
+    objective fits the real and imaginary parts of G simultaneously, so
+    complex-valued G(i*omega) data is handled directly while X_l >= 0 enforces
+    the matrix causality condition. Do not split a genuinely coupled matrix
+    into elementwise NNLS, which would drop the off-diagonal PSD coupling.
+
+    When the weights are block/orbital-diagonal -- either because G is diagonal
+    or because only the diagonal is wanted -- this full matrix SDP is not
+    needed: a diagonal X_l is PSD iff each diagonal entry is >= 0, so each
+    orbital reduces to an independent 1x1 problem and elementwise NNLS per
+    orbital is exact and correct. That is the normal diagonal case, not a
+    violation of the causality condition.
+
+    For Norb == 1 the 1x1 Hermitian PSD condition reduces to a nonnegative real
+    scalar, handled by NNLS in the caller rather than here.
+    """
+    try:
+        import cvxpy as cp
+    except ImportError as e:
+        raise ImportError(
+            "Optional dependency 'cvxpy' is required when use_c=True. "
+            "Install it via `pip install cvxpy`."
+        ) from e
+
+    Nw, Np = M.shape
+    Norb = G.shape[1]
+    G2 = G.reshape(Nw, Norb * Norb)
+
+    if complex:
+        A = [cp.Variable((Norb, Norb), symmetric=True) for _ in range(Np)]
+        B = [cp.Variable((Norb, Norb)) for _ in range(Np)]
+        constraints = []
+        for a, b in zip(A, B):
+            # A+iB is Hermitian PSD iff B is skew-symmetric and this real block is PSD.
+            constraints += [b + b.T == 0, cp.bmat([[a, -b], [b, a]]) >> 0]
+
+        A_flat = cp.vstack([cp.reshape(a, (1, Norb * Norb), order="C") for a in A])
+        B_flat = cp.vstack([cp.reshape(b, (1, Norb * Norb), order="C") for b in B])
+        pred_re = M.real @ A_flat - M.imag @ B_flat
+        pred_im = M.real @ B_flat + M.imag @ A_flat
+        objective = cp.Minimize(
+            cp.sum_squares(pred_re - G2.real) + cp.sum_squares(pred_im - G2.imag)
+        )
+        prob = cp.Problem(objective, constraints)
+    else:
+        X = [cp.Variable((Norb, Norb), PSD=True) for _ in range(Np)]
+        X_flat = cp.vstack([cp.reshape(x, (1, Norb * Norb), order="C") for x in X])
+        pred_re = M.real @ X_flat
+        pred_im = M.imag @ X_flat
+        objective = cp.Minimize(
+            cp.sum_squares(pred_re - G2.real) + cp.sum_squares(pred_im - G2.imag)
+        )
+        prob = cp.Problem(objective)
+
+    prob.solve(solver="SCS", verbose=False, eps=eps)
+
+    R = np.zeros((Np, Norb, Norb), dtype=np.complex128)
+    if complex:
+        for i in range(Np):
+            r = A[i].value + 1j * B[i].value
+            R[i] = (r + r.T.conj()) / 2.0
+    else:
+        for i in range(Np):
+            R[i] = X[i].value
+    return R
+
+
 # import mosek
 def eval_with_pole(pol, Z, weight, statistics="Fermion"):
     pol_t = np.reshape(pol, [pol.size, 1])
@@ -27,14 +113,6 @@ def eval_with_pole(pol, Z, weight, statistics="Fermion"):
 def get_weight(
     pol, Z, G, cleanflag=True, maxiter=1000, complex=True, fast=False, eps=1e-8, statistics="Fermion"
 ):
-    if not cleanflag and len(G.shape)>1:
-        try:
-            import cvxpy as cp
-        except ImportError as e:
-            raise ImportError(
-                "Optional dependency 'cvxpy' is required when use_c=True. "
-                "Install it via `pip install cvxpy`."
-            ) from e
     pol_t = np.reshape(pol, [pol.size, 1])
     if statistics == "Fermion":
         M = 1 / (Z - pol_t)
@@ -70,35 +148,19 @@ def get_weight(
                     R[:, j, i] = R1 - 1j * R2
         else:
             if not fast:
-                Nw = len(Z)
-
-                if complex:
-                    X = [cp.Variable((Norb, Norb), hermitian=True) for i in range(Np)]
-                    constraints = [X[i] >> 0 for i in range(Np)]
+                if Norb == 1:
+                    GG = np.concatenate([G[:, 0, 0].real, G[:, 0, 0].imag])
+                    R[:, 0, 0] = scipy.optimize.nnls(MM, GG, maxiter=maxiter)[0]
                 else:
-                    X = [cp.Variable((Norb, Norb), PSD=True) for i in range(Np)]
-
-            
-                Gfit = []
-                for w in range(Nw):
-                    Gfit.append(cp.sum_squares(sum([ M[w,i]*X[i] for i in range(Np)]) - G[w,:,:]))
-
-                if complex:
-                    prob = cp.Problem(cp.Minimize(sum(Gfit)), constraints)
-                else:
-                    prob = cp.Problem(cp.Minimize(sum(Gfit)))
-                prob.solve(solver="SCS", verbose=False, eps=eps)
-                #  MOSEK parameters
-                # mosek_params_dict = {"MSK_DPAR_INTPNT_CO_TOL_PFEAS": 1.e-8,\
-                #                     "MSK_DPAR_INTPNT_CO_TOL_DFEAS": 1.e-8,
-                #                     "MSK_DPAR_INTPNT_CO_TOL_REL_GAP": 1.e-8,
-                #                     "MSK_DPAR_INTPNT_CO_TOL_NEAR_REL": 1000}
-                # result = prob.solve(solver = "MOSEK", verbose=False,\
-                #                 mosek_params = mosek_params_dict)
-
-                for i in range(Np):
-                    R[i] = X[i].value
+                    R = _solve_psd_weight_sdp(M, G, complex=complex, eps=eps)
             else:
+                try:
+                    import cvxpy as cp
+                except ImportError as e:
+                    raise ImportError(
+                        "Optional dependency 'cvxpy' is required when use_c=True. "
+                        "Install it via `pip install cvxpy`."
+                    ) from e
                 for i in range(Norb):
                     GG = np.concatenate([G[:, i, i].real, G[:, i, i].imag])
                     Rii = scipy.optimize.nnls(MM, GG, maxiter=maxiter)[0]
