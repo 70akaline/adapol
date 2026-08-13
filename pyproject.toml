@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [project]
-name = "adapol"
+name = "adapole-l2"
 version = "0.1.0"
 authors = [
   { name="Zhen Huang", email="hertz@berkeley.edu" },
