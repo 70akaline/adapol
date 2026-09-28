@@ -16,7 +16,7 @@ with real poles $p_k$ and scalar or matrix-valued residues $R_k$, using the AAA 
 pip install adapol
 ```
 
-The only dependencies are `numpy` and `scipy`.
+The core dependencies are `numpy` and `scipy`; install the optional `cvxpy` extra with `pip install 'adapol[cvxpy]'` for matrix-valued PSD residue fitting and projection.
 
 ## Usage
 
@@ -25,6 +25,26 @@ The only dependencies are `numpy` and `scipy`.
 - **`approx_freq_aaa(F, Z, ...)`** fits frequency data `F`, sampled at (typically Matsubara) points `Z`, with a sum of simple poles, using the AAA algorithm. The number of poles is controlled by a pole budget `max_n_poles` and/or a AAA error tolerance `aaa_tol`.
 - **`approx_sop_fast(poles, residues, beta, ...)`** approximates a given sum of poles by a (hopefully) smaller one in a single AAA pass. The number of poles is again controlled by `max_n_poles` and/or `aaa_tol`, and an optional `nonlinear_optimization` step refines the pole locations.
 - **`approx_sop_tol(poles, residues, tol, beta, ...)`** finds the smallest sum of poles whose actual error (in $L^2(\tau)$ and $l^2(i \omega_n)$ ) is below the tolerance `tol`.
+
+Pass `psd=True` and optionally `psd_eps` to the `approx_*` fitting and compression functions or `adapol.triqs.approx_gf_*` functions to constrain scalar residues to be nonnegative and matrix residues to be Hermitian positive semidefinite; for example, `poles, residues, error = approx_freq_aaa(F, Z, max_n_poles=20, psd=True)`.
+
+This reuses the 0.2.x AAA pole selection and residue-fitting pipeline: frequency data uses least squares at the sample points, while SOP/DLR compression uses the normalized imaginary-time Frobenius L2 norm and the existing optional nonlinear pole optimization. `psd_eps` controls the SDP solver tolerance, not the final approximation error; `approx_sop_tol` still enforces `tol` and may fail if a causal fit cannot meet it. There are no legacy `hybfit`, `anacont`, or `polefitting_dlr` compatibility entry points.
+
+For matrix-valued data, `pick_matrix_projection` optionally fits positive-semidefinite residues on a fixed real pole grid with known spectral moments; this is not a direct nearest-point projection onto the unrestricted Pick cone.
+
+For a self-energy with high-frequency expansion `Sigma(z) = Sigma_inf + M1/z + M2/z**2 + ...`, pass the static part and both moments explicitly:
+
+```python
+from adapol import pick_matrix_projection
+
+Sigma_projected, projection_residues = pick_matrix_projection(
+    Sigma, z, pole_grid, static_part=Sigma_inf, first_moment=M1, second_moment=M2
+)
+```
+
+For a normalized canonical fermionic Green's function, use `first_moment=np.eye(n_orb)`; for a hybridization, supply its known moment rather than assuming the identity. Pass `first_moment=None` for PSD-only projection without that sum rule.
+
+The moment constraints apply only during this explicit preprocessing step. Use `psd=True` in subsequent compression to constrain the new residues, but those residue constraints do not preserve the projection moments. Evaluate the resulting pole expansion at other complex frequencies for analytic continuation.
 
 ## Examples
 
