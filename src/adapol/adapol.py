@@ -18,7 +18,8 @@ from .sop import SumOfSimplePoles
 from .sop_compr import SumOfPolesCompression
 
 
-def approx_freq_aaa(F, Z, max_n_poles=None, aaa_tol=None, verbose=False):
+def approx_freq_aaa(F, Z, max_n_poles=None, aaa_tol=None, verbose=False,
+                    *, psd=False, psd_eps=1e-8):
     """Approximate frequency data :math:`F` sampled at points :math:`Z`
     with a sum of simple poles, by running the AAA algorithm.
 
@@ -34,6 +35,11 @@ def approx_freq_aaa(F, Z, max_n_poles=None, aaa_tol=None, verbose=False):
         Tolerance on the AAA residual, i.e. on the pole step (see the note below).
     verbose : bool, optional
         If True, print verbose output during the approximation process.
+    psd : bool, optional
+        If True, fit nonnegative scalar or Hermitian positive-semidefinite
+        matrix residues. No moment constraints or Pick projection are applied.
+    psd_eps : float, optional
+        Tolerance used by the positive-semidefinite residue fit.
 
     Returns
     -------
@@ -130,12 +136,15 @@ def approx_freq_aaa(F, Z, max_n_poles=None, aaa_tol=None, verbose=False):
     if max_n_poles is None and aaa_tol is None:
         raise ValueError("At least one of `max_n_poles` or `aaa_tol` must be provided.")
 
-    return _frequency_data_driver(F, Z, max_n_poles=max_n_poles, tol=aaa_tol, verbose=verbose)
+    return _frequency_data_driver(
+        F, Z, max_n_poles=max_n_poles, tol=aaa_tol, verbose=verbose,
+        psd=psd, psd_eps=psd_eps)
 
 
 def approx_sop_fast(
         poles, residues, beta, max_n_poles=None, aaa_tol=None,
-        nonlinear_optimization=False, Z=None, verbose=False):
+        nonlinear_optimization=False, Z=None, verbose=False,
+        *, psd=False, psd_eps=1e-8):
     """Approximate a sum of simple poles defined by `poles` and `residues`
     with a sum of a (possibly) smaller number of simple poles, by running the
     AAA algorithm and, optionally, a non-linear optimization step.
@@ -165,6 +174,11 @@ def approx_sop_fast(
         a symmetric fermionic Matsubara grid is used by default (see Notes).
     verbose : bool, optional
         If True, print verbose output during the approximation process.
+    psd : bool, optional
+        If True, fit nonnegative scalar or Hermitian positive-semidefinite
+        matrix residues. No moment constraints or Pick projection are applied.
+    psd_eps : float, optional
+        Tolerance used by the positive-semidefinite residue fit.
 
     Returns
     -------
@@ -301,12 +315,13 @@ def approx_sop_fast(
 
     return _sum_of_simple_poles_driver(
         poles, residues, max_n_poles=max_n_poles, tol=aaa_tol, beta=beta,
-        nonlinear_optimization=nonlinear_optimization, Z=Z, verbose=verbose)
+        nonlinear_optimization=nonlinear_optimization, Z=Z, verbose=verbose,
+        psd=psd, psd_eps=psd_eps)
 
 
 def approx_sop_tol(
         poles, residues, tol, beta, nonlinear_optimization=False, Z=None,
-        verbose=False):
+        verbose=False, *, psd=False, psd_eps=1e-8):
     """Approximate a sum of simple poles defined by `poles` and `residues`
     with the smallest sum of simple poles whose imaginary-time
     :math:`L^2(\\tau)` error is below the tolerance `tol`.
@@ -338,6 +353,11 @@ def approx_sop_tol(
         line per pass through the AAA and residue fit pipeline, showing the pole
         count and error of each candidate fit, and 2 additionally prints the
         indented per step output of the AAA algorithm itself.
+    psd : bool, optional
+        If True, fit nonnegative scalar or Hermitian positive-semidefinite
+        matrix residues. No moment constraints or Pick projection are applied.
+    psd_eps : float, optional
+        Tolerance used by the positive-semidefinite residue fit.
 
     Returns
     -------
@@ -410,12 +430,14 @@ def approx_sop_tol(
     sc = SumOfPolesCompression(
         poles, residues, beta, Z=Z, tol=tol, 
         nonlinear_optimize=nonlinear_optimization, 
-        nonlinear_post_optimize=nonlinear_optimization, verbose=verbose)
+        nonlinear_post_optimize=nonlinear_optimization, verbose=verbose,
+        psd=psd, psd_eps=psd_eps)
     return sc.poles, sc.residues, sc.error    
 
 
 def _frequency_data_driver(F, Z, max_n_poles, tol, verbose=False,
-    cleanup=True, cleanup_residue_tol=1e-12, cleanup_imag_tol=1e-8):
+    cleanup=True, cleanup_residue_tol=1e-12, cleanup_imag_tol=1e-8,
+    *, psd=False, psd_eps=1e-8):
 
     # Fixme: max_steps != n_poles 
     # Fixme: tol is only controlling AAA
@@ -428,7 +450,7 @@ def _frequency_data_driver(F, Z, max_n_poles, tol, verbose=False,
         verbose=verbose)
 
     sop = bra.get_sop()
-    sop.fit_residues_to_freq_samples(Z, F)
+    sop.fit_residues_to_freq_samples(Z, F, psd=psd, psd_eps=psd_eps)
 
     error = np.max(np.abs(sop(Z) - F))
 
@@ -437,7 +459,8 @@ def _frequency_data_driver(F, Z, max_n_poles, tol, verbose=False,
 
 def _sum_of_simple_poles_driver(poles, residues, max_n_poles, tol, beta,
     cleanup=True, cleanup_residue_tol=1e-12, cleanup_imag_tol=1e-8, 
-    nonlinear_optimization=False, Z=None, verbose=False):
+    nonlinear_optimization=False, Z=None, verbose=False,
+    *, psd=False, psd_eps=1e-8):
 
     """ Single pass of the pole and residue steps, see `adapol._pipeline`. """
 
@@ -452,7 +475,8 @@ def _sum_of_simple_poles_driver(poles, residues, max_n_poles, tol, beta,
         cleanup_imag_tol=cleanup_imag_tol, verbose=verbose)
 
     return _imtime_residue_step(
-        sop, aaa_poles, beta, nonlinear=nonlinear_optimization, verbose=verbose)
+        sop, aaa_poles, beta, nonlinear=nonlinear_optimization,
+        verbose=verbose, psd=psd, psd_eps=psd_eps)
 
 
 def _max_steps_from_max_n_poles(max_n_poles):

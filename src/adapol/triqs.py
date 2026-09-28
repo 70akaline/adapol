@@ -11,7 +11,8 @@ from .adapol import _frequency_data_driver
 from .adapol import _sum_of_simple_poles_driver
 
 
-def approx_gf_imfreq_aaa(G_w, max_n_poles=None, aaa_tol=None, verbose=False):
+def approx_gf_imfreq_aaa(G_w, max_n_poles=None, aaa_tol=None, verbose=False,
+                         *, psd=False, psd_eps=1e-8):
     """Approximate a Green's function :math:`G` given on an imaginary-frequency
     mesh with a sum of simple poles, by running the AAA algorithm.
 
@@ -31,6 +32,11 @@ def approx_gf_imfreq_aaa(G_w, max_n_poles=None, aaa_tol=None, verbose=False):
         the final error, which also depends on the subsequent residue fit.
     verbose : bool, optional
         If True, print verbose output during the approximation process.
+    psd : bool, optional
+        If True, fit nonnegative scalar or Hermitian positive-semidefinite
+        matrix residues. No moment constraints or Pick projection are applied.
+    psd_eps : float, optional
+        Tolerance used by the positive-semidefinite residue fit.
 
     Returns
     -------
@@ -69,12 +75,14 @@ def approx_gf_imfreq_aaa(G_w, max_n_poles=None, aaa_tol=None, verbose=False):
 
     Z, F = _gf_imfreq_to_data(G_w)
     return _frequency_data_driver(
-        F, Z, max_n_poles=max_n_poles, tol=aaa_tol, verbose=verbose)
+        F, Z, max_n_poles=max_n_poles, tol=aaa_tol, verbose=verbose,
+        psd=psd, psd_eps=psd_eps)
 
 
 def approx_gf_dlr_fast(
         G_dlr, max_n_poles=None, aaa_tol=None,
-        nonlinear_optimization=False, verbose=False):
+        nonlinear_optimization=False, verbose=False,
+        *, psd=False, psd_eps=1e-8):
     """Approximate a Green's function :math:`G` given in the discrete Lehmann
     representation (DLR) with a sum of a (possibly) smaller number of simple
     poles, by running the AAA algorithm and, optionally, a non-linear
@@ -101,6 +109,11 @@ def approx_gf_dlr_fast(
         using the AAA poles only as an initial guess.
     verbose : bool, optional
         If True, print verbose output during the approximation process.
+    psd : bool, optional
+        If True, fit nonnegative scalar or Hermitian positive-semidefinite
+        matrix residues. No moment constraints or Pick projection are applied.
+    psd_eps : float, optional
+        Tolerance used by the positive-semidefinite residue fit.
 
     Returns
     -------
@@ -173,10 +186,12 @@ def approx_gf_dlr_fast(
     poles, residues, beta, Z = _gf_dlr_to_data(G_dlr)
     return _sum_of_simple_poles_driver(
         poles, residues, max_n_poles=max_n_poles, tol=aaa_tol, beta=beta,
-        nonlinear_optimization=nonlinear_optimization, Z=Z, verbose=verbose)
+        nonlinear_optimization=nonlinear_optimization, Z=Z, verbose=verbose,
+        psd=psd, psd_eps=psd_eps)
 
 
-def approx_gf_dlr_tol(G_dlr, tol, nonlinear_optimization=False, verbose=False):
+def approx_gf_dlr_tol(G_dlr, tol, nonlinear_optimization=False, verbose=False,
+                      *, psd=False, psd_eps=1e-8):
     """Approximate a Green's function :math:`G` given in the discrete Lehmann
     representation (DLR) with the smallest sum of simple poles whose
     imaginary-time :math:`L^2(\\tau)` error is below the tolerance `tol`.
@@ -203,6 +218,11 @@ def approx_gf_dlr_tol(G_dlr, tol, nonlinear_optimization=False, verbose=False):
         line per pass through the AAA and residue fit pipeline, showing the pole
         count and error of each candidate fit, and 2 additionally prints the
         indented per step output of the AAA algorithm itself.
+    psd : bool, optional
+        If True, fit nonnegative scalar or Hermitian positive-semidefinite
+        matrix residues. No moment constraints or Pick projection are applied.
+    psd_eps : float, optional
+        Tolerance used by the positive-semidefinite residue fit.
 
     Returns
     -------
@@ -244,7 +264,8 @@ def approx_gf_dlr_tol(G_dlr, tol, nonlinear_optimization=False, verbose=False):
     """
     comp = TriqsDLRCompression(
         G_dlr, tol=tol, nonlinear_optimize=nonlinear_optimization,
-        nonlinear_post_optimize=nonlinear_optimization, verbose=verbose)
+        nonlinear_post_optimize=nonlinear_optimization, verbose=verbose,
+        psd=psd, psd_eps=psd_eps)
     return comp.poles, comp.residues, comp.error
 
 
@@ -280,12 +301,19 @@ class TriqsDLRCompression:
 
     def __init__(self, G, tol=1e-14, 
                  nonlinear_optimize=False, nonlinear_post_optimize=False, 
-                 max_upwind_steps=4, verbose=True):
+                 max_upwind_steps=4, verbose=True,
+                 *, psd=False, psd_eps=1e-8):
+
+        """Compress DLR data, optionally fitting nonnegative scalar or Hermitian
+        positive-semidefinite matrix residues with `psd=True` and tolerance
+        `psd_eps`. Moment constraints and Pick projection are not automatic."""
 
         self.G = G
         self.tol = tol
         self.nonlinear_optimize = nonlinear_optimize
         self.nonlinear_post_optimize = nonlinear_post_optimize
+        self.psd = psd
+        self.psd_eps = psd_eps
         self.verbose = verbose
 
         from triqs.gfs import MeshDLR
@@ -313,7 +341,8 @@ class TriqsDLRCompression:
             beta=self.beta, tol=tol, 
             nonlinear_optimize=nonlinear_optimize, 
             nonlinear_post_optimize=nonlinear_post_optimize, 
-            max_upwind_steps=max_upwind_steps, verbose=verbose)
+            max_upwind_steps=max_upwind_steps, verbose=verbose,
+            psd=psd, psd_eps=psd_eps)
         
         sc = self.sop_comp
         self.poles, self.residues, self.aaa_steps, self.error = sc.poles, sc.residues, sc.aaa_steps, sc.error

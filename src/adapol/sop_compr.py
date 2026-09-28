@@ -27,16 +27,22 @@ class SumOfPolesCompression:
 
     def __init__(self, poles, residues, beta, Z=None, tol=1e-10, 
                  nonlinear_optimize=False, nonlinear_post_optimize=False, 
-                 max_upwind_steps=4, verbose=True):
+                 max_upwind_steps=4, verbose=True,
+                 *, psd=False, psd_eps=1e-8):
 
         """ `verbose` selects the amount of printed output:
 
         0 (or False) is silent, 1 (or True) prints one line per pass through the
         AAA and residue fit pipeline, and 2 also prints the indented per step
-        output of the AAA algorithm itself. """
+        output of the AAA algorithm itself. With `psd=True`, scalar residues
+        are nonnegative and matrix residues are Hermitian positive semidefinite;
+        `psd_eps` is the fit tolerance. Neither moment constraints nor Pick
+        projection are applied automatically. """
 
         self.tol = tol
         self.nonlinear_optimize = nonlinear_optimize
+        self.psd = psd
+        self.psd_eps = psd_eps
         self.verbose = int(verbose)
 
         # The post optimization retries the bisection result with one pole less,
@@ -187,7 +193,8 @@ class SumOfPolesCompression:
             poles, n_steps, aaa_err = self._aaa_poles(n_steps=n_steps, aaa_tol=aaa_tol)
 
             poles, residues, err = _imtime_residue_step(
-                self.sop, poles, self.beta, nonlinear=nonlinear)
+                self.sop, poles, self.beta, nonlinear=nonlinear,
+                psd=self.psd, psd_eps=self.psd_eps)
 
             self._pipeline_cache[(n_steps, nonlinear)] = (poles, residues, n_steps, aaa_err, err)
 
@@ -218,4 +225,3 @@ class SumOfPolesCompression:
         poles, n_steps, aaa_err = self._aaa_cache[n_steps]
 
         return poles.copy(), n_steps, aaa_err
-

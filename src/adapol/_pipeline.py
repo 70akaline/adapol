@@ -46,7 +46,8 @@ def _aaa_pole_step(Z, F, max_steps=None, tol=None, cleanup=True,
     return bra.get_sop().p, bra.aaa_steps, bra.residual
 
 
-def _imtime_residue_step(sop, poles, beta, nonlinear=False, verbose=False):
+def _imtime_residue_step(sop, poles, beta, nonlinear=False, verbose=False,
+                         *, psd=False, psd_eps=1e-8):
 
     """ Approximate the sum of simple poles `sop` using the given `poles`, by
     minimizing the imaginary time L2 norm error at inverse temperature `beta`.
@@ -60,9 +61,10 @@ def _imtime_residue_step(sop, poles, beta, nonlinear=False, verbose=False):
 
     if nonlinear:
         sop_opt = sop.best_imtime_non_linear_lstsq_l2_norm_approximation_using_pole_guess(
-            poles=poles, beta=beta, verbose=verbose)
+            poles=poles, beta=beta, verbose=verbose, psd=psd, psd_eps=psd_eps)
     else:
-        sop_opt = sop.best_imtime_lstsq_l2_norm_approximation_using_poles(poles, beta)
+        sop_opt = sop.best_imtime_lstsq_l2_norm_approximation_using_poles(
+            poles, beta, psd=psd, psd_eps=psd_eps)
 
     err = (sop - sop_opt).imtime_l2_norm(beta=beta)
 
