@@ -30,6 +30,9 @@ dependencies = [
     "scipy",
 ]
 
+[project.optional-dependencies]
+cvxpy = ["cvxpy"]
+
 [project.urls]
 "Homepage" = "https://flatironinstitute.github.io/adapol"
 "Bug Tracker" = "https://github.com/flatironinstitute/adapol/issues"

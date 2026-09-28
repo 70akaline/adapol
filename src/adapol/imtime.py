@@ -13,6 +13,8 @@ import numpy as np
 from numpy.polynomial.legendre import leggauss
 from scipy.optimize import minimize as scipy_minimize
 
+from ._psd import fit_psd_residues
+
 
 def kernel(tau, omega):
     """
@@ -236,7 +238,8 @@ class ImTimeQuadrature:
         return np.sqrt(np.sum(self.integrate(np.abs(f(self.tau_i))**2)) / self.beta)
 
 
-    def best_l2_norm_approximation_using_poles(self, func, poles, full_return=False):
+    def best_l2_norm_approximation_using_poles(
+            self, func, poles, full_return=False, *, psd=False, psd_eps=1e-8):
         """ Compute the best sum-of-poles approximation of the function :math:`f(\\tau)` 
         using given poles :math:`z_p`, by determining the residues :math:`R_p` 
         that minimizes the imaginary time L2 norm error. 
@@ -259,6 +262,9 @@ class ImTimeQuadrature:
         with :math:`A_{ip} = \\sqrt{w_i} K(\\tau_i, z_p)` and :math:`b_i = \\sqrt{w_i} f(\\tau_i)`.
         """
 
+        if psd and not np.isrealobj(poles):
+            raise ValueError("PSD residues require real poles")
+
         f_iX = func(self.tau_i)
 
         if f_iX.ndim > 1:
@@ -275,7 +281,13 @@ class ImTimeQuadrature:
         wK_ip = self.sqrt_w_i[:, None] * K_ip
         wf_i = self.sqrt_w_i[:, None] * f_i
 
-        residues, sum_sq_err, _, _ = np.linalg.lstsq(wK_ip, wf_i, rcond=None)
+        if psd:
+            weighted_f = np.einsum('i,i...->i...', self.sqrt_w_i, f_iX)
+            residues = fit_psd_residues(wK_ip, weighted_f, eps=psd_eps)
+            residues = residues.reshape(len(poles), -1)
+            sum_sq_err = np.sum(np.abs(wK_ip @ residues - wf_i)**2, axis=0)
+        else:
+            residues, sum_sq_err, _, _ = np.linalg.lstsq(wK_ip, wf_i, rcond=None)
 
         if full_return:
             wr_i = wK_ip @ residues - wf_i
@@ -290,7 +302,8 @@ class ImTimeQuadrature:
             return residues
     
 
-    def best_l2_norm_approximation(self, sop, poles, verbose=False):
+    def best_l2_norm_approximation(
+            self, sop, poles, verbose=False, *, psd=False, psd_eps=1e-8):
         """ Compute the best sum-of-poles approximation of a given sum-of-poles `sop` 
         by optimizing both the poles :math:`z_p` and residues :math:`R_p`, 
         starting from an initial guess for the poles.
@@ -312,7 +325,8 @@ class ImTimeQuadrature:
 
         """
 
-        func = lambda poles : self.l2_norm_gradient_with_respect_to_poles_opt(sop, poles)
+        func = lambda poles : self.l2_norm_gradient_with_respect_to_poles_opt(
+            sop, poles, psd=psd, psd_eps=psd_eps)
 
         res = scipy_minimize(
             func, poles,
@@ -325,7 +339,8 @@ class ImTimeQuadrature:
 
         poles_opt = res.x
 
-        residues_opt = self.best_l2_norm_approximation_using_poles(sop.imtime_function(self.beta), poles_opt)
+        residues_opt = self.best_l2_norm_approximation_using_poles(
+            sop.imtime_function(self.beta), poles_opt, psd=psd, psd_eps=psd_eps)
 
         from .sop import SumOfSimplePoles
         sop_opt = SumOfSimplePoles(poles=poles_opt, residues=residues_opt)
@@ -455,7 +470,8 @@ class ImTimeQuadrature:
         return N, jac
 
 
-    def l2_norm_gradient_with_respect_to_poles_opt(self, sop, poles):
+    def l2_norm_gradient_with_respect_to_poles_opt(
+            self, sop, poles, *, psd=False, psd_eps=1e-8):
         """Compute the gradient of the imaginary time L2 norm error with respect to the poles, 
         for a given sum-of-simple-poles representation `sop` and a set of poles `poles` to optimize.
 
@@ -492,7 +508,8 @@ class ImTimeQuadrature:
         f_tau = sop.imtime_function(self.beta)
 
         R_p, wK_ip, wr_i, sum_sq_err = \
-            self.best_l2_norm_approximation_using_poles(f_tau, poles, full_return=True)
+            self.best_l2_norm_approximation_using_poles(
+                f_tau, poles, full_return=True, psd=psd, psd_eps=psd_eps)
 
         N = np.sqrt(np.sum(sum_sq_err))
 
@@ -501,6 +518,9 @@ class ImTimeQuadrature:
 
         wr_iX = wr_i.reshape(wr_i.shape[0], -1)
         R_pX = R_p.reshape(R_p.shape[0], -1)
+
+        if psd and N == 0:
+            return N, np.zeros_like(poles)
 
         jac = np.sum((dwK_dpoles_ip.T @ wr_iX.conj()) * R_pX, axis=1).real / N
 

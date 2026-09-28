@@ -9,6 +9,7 @@ Author: Hugo U. R. Strand, 2026
 
 import numpy as np
 
+from adapol._psd import fit_psd_residues
 from adapol.imtime import ImTimeQuadrature
 from adapol.imtime import kernel as imtime_kernel
 
@@ -33,14 +34,19 @@ class SumOfSimplePoles:
         return np.einsum('zp,p...->z...', C, self.R)
     
 
-    def fit_residues_to_freq_samples(self, Z, F):
+    def fit_residues_to_freq_samples(self, Z, F, *, psd=False, psd_eps=1e-8):
         """ Fit the residues using sample points :math:`Z` and values :math:`F` in (complex) frequency space,
         by solving the linear system :math:`C R = F`, using least squares, where :math:`C_{jk} = 1/(Z_j - p_k)`. """
         
         n = len(Z)
+        if psd and not np.isrealobj(self.p):
+            raise ValueError("PSD residues require real poles")
         C = 1. / (Z[:, None] - self.p[None, :])
-        residues, _, _, _ = np.linalg.lstsq(C, F.reshape(n, -1), rcond=None)
-        self.R = residues.reshape([len(self.p)] + list(F.shape[1:]))
+        if psd:
+            self.R = fit_psd_residues(C, F, eps=psd_eps)
+        else:
+            residues, _, _, _ = np.linalg.lstsq(C, F.reshape(n, -1), rcond=None)
+            self.R = residues.reshape([len(self.p)] + list(F.shape[1:]))
 
 
     def imtime_l2_norm(self, beta):
@@ -49,17 +55,21 @@ class SumOfSimplePoles:
         return itq.l2_norm(f_tau)
 
     
-    def best_imtime_lstsq_l2_norm_approximation_using_poles(self, poles, beta):
+    def best_imtime_lstsq_l2_norm_approximation_using_poles(
+            self, poles, beta, *, psd=False, psd_eps=1e-8):
         itq = self.get_imtime_quadrature(beta)
         f_tau = self.imtime_function(beta)
-        residues = itq.best_l2_norm_approximation_using_poles(f_tau, poles)
+        residues = itq.best_l2_norm_approximation_using_poles(
+            f_tau, poles, psd=psd, psd_eps=psd_eps)
         sop = SumOfSimplePoles(poles=poles, residues=residues)
         return sop
 
 
-    def best_imtime_non_linear_lstsq_l2_norm_approximation_using_pole_guess(self, poles, beta, verbose=False):
+    def best_imtime_non_linear_lstsq_l2_norm_approximation_using_pole_guess(
+            self, poles, beta, verbose=False, *, psd=False, psd_eps=1e-8):
         itq = self.get_imtime_quadrature(beta)
-        sop_opt = itq.best_l2_norm_approximation(self, poles, verbose=verbose)
+        sop_opt = itq.best_l2_norm_approximation(
+            self, poles, verbose=verbose, psd=psd, psd_eps=psd_eps)
         return sop_opt
 
 
