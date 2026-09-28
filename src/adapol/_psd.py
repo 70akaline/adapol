@@ -1,6 +1,7 @@
 """Positive-semidefinite residue fitting for fixed poles."""
 
 import numpy as np
+from scipy.optimize import nnls
 
 
 def fit_psd_residues(
@@ -10,6 +11,11 @@ def fit_psd_residues(
 
     ``F`` must have shape ``(n_samples,)`` or ``(n_samples, n_orb, n_orb)``.
     Optional moments impose ``sum(R)`` and ``sum(poles * R)``, respectively.
+
+    The matrix solve uses the exact real embedding of a Hermitian residue
+    ``R = A + i B``: ``A = A.T``, ``B = -B.T`` and
+    ``[[A, -B], [B, A]] >= 0``. The full off-diagonal PSD coupling is retained.
+    Scalar and 1x1 fits without moments reduce exactly to NNLS.
     """
     M = np.asarray(M)
     F = np.asarray(F)
@@ -29,6 +35,12 @@ def fit_psd_residues(
         if moment is not None and np.shape(moment) != expected_shape:
             raise ValueError(f"{name} must have shape {expected_shape}")
 
+    if (F.ndim == 1 or F.shape[1] == 1) and first_moment is None and second_moment is None:
+        design = np.concatenate([M.real, M.imag])
+        target = F.reshape(-1)
+        values = nnls(design, np.concatenate([target.real, target.imag]))[0]
+        return values.reshape((n_poles,) + F.shape[1:])
+
     import cvxpy as cp
 
     if F.ndim == 1:
@@ -38,29 +50,39 @@ def fit_psd_residues(
             constraints.append(cp.sum(residues) == first_moment)
         if second_moment is not None:
             constraints.append(cp.sum(cp.multiply(np.real(poles), residues)) == second_moment)
-        residual = M @ residues - F
+        residual_re = M.real @ residues - F.real
+        residual_im = M.imag @ residues - F.imag
     else:
         n_orb = F.shape[1]
-        residues = [cp.Variable((n_orb, n_orb), hermitian=True) for _ in range(n_poles)]
-        constraints = [residue >> 0 for residue in residues]
+        A = [cp.Variable((n_orb, n_orb), symmetric=True) for _ in range(n_poles)]
+        B = [cp.Variable((n_orb, n_orb)) for _ in range(n_poles)]
+        constraints = []
+        for a, b in zip(A, B):
+            constraints += [b + b.T == 0, cp.bmat([[a, -b], [b, a]]) >> 0]
         if first_moment is not None:
-            constraints.append(sum(residues) == first_moment)
+            constraints += [sum(A) == np.real(first_moment), sum(B) == np.imag(first_moment)]
         if second_moment is not None:
-            constraints.append(
-                sum(pole * residue for pole, residue in zip(np.real(poles), residues))
-                == second_moment
-            )
-        flattened = cp.vstack(
-            [cp.reshape(residue, (1, n_orb * n_orb), order="C") for residue in residues]
+            constraints += [
+                sum(p * a for p, a in zip(np.real(poles), A)) == np.real(second_moment),
+                sum(p * b for p, b in zip(np.real(poles), B)) == np.imag(second_moment),
+            ]
+        A_flat = cp.vstack(
+            [cp.reshape(a, (1, n_orb * n_orb), order="C") for a in A]
         )
-        residual = M @ flattened - F.reshape(F.shape[0], -1)
+        B_flat = cp.vstack(
+            [cp.reshape(b, (1, n_orb * n_orb), order="C") for b in B]
+        )
+        target = F.reshape(F.shape[0], -1)
+        residual_re = M.real @ A_flat - M.imag @ B_flat - target.real
+        residual_im = M.real @ B_flat + M.imag @ A_flat - target.imag
 
-    problem = cp.Problem(cp.Minimize(cp.sum_squares(cp.abs(residual))), constraints)
+    objective = cp.Minimize(cp.sum_squares(residual_re) + cp.sum_squares(residual_im))
+    problem = cp.Problem(objective, constraints)
     problem.solve(solver="SCS", eps=eps)
     if problem.status != cp.OPTIMAL:
         raise RuntimeError(f"PSD residue fit failed: {problem.status}")
 
     if F.ndim == 1:
         return residues.value
-    values = np.asarray([residue.value for residue in residues])
+    values = np.asarray([a.value + 1j * b.value for a, b in zip(A, B)])
     return (values + values.transpose(0, 2, 1).conj()) / 2
